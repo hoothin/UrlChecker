@@ -6,6 +6,7 @@ import threading, queue
 import html
 import socket
 import requests
+import getopt
 from datetime import *
 from requests.adapters import HTTPAdapter
 from urllib.parse import urlparse
@@ -13,6 +14,7 @@ from urllib.parse import urlparse
 socket.setdefaulttimeout(10)
 requests.packages.urllib3.disable_warnings()
 url_queue = queue.Queue()
+urlsLen = 0;
 threading_num = 50
 count = 0
 survival_urls = {}
@@ -61,16 +63,23 @@ def get_headers(url):
     return headers
 
 
-def get_url(urls_txt):
+def get_url(urls_txt, backlinkTo):
     with open(urls_txt, 'r') as f:
         urls_list = f.readlines()
-    return urls_list
+    if backlinkTo == '':
+        return urls_list
+    new_lines = []
+    for line in urls_list:
+        new_line = line.replace('hoothin', backlinkTo)
+        new_lines.append(new_line)
+    return new_lines
 
 
 def url_check():
     global survival_urls
     global broken_urls
     global jsError_urls
+    global urlsLen
     while not url_queue.empty():
 
         global count
@@ -113,12 +122,14 @@ def url_check():
                     survival_urls[url] = outStr
                 else:
                     broken_urls[urlparse(url).netloc] = outStr
-            print(url + "\t" + outStr)
+            print(url + "\t\t" + (outStr[0:20]))
         except Exception as e:
             broken_urls[urlparse(url).netloc] = "error"
-            print(url + "\t网站失效")
+            print(url + "\t\tInvalid website")
         count += 1
-        print("已检测：" + str(count), end="\r")
+        print("Current: " + str(count) + "/" + str(urlsLen), end="\r")
+        if count == urlsLen:
+            print("Completed: " + str(count) + "/" + str(urlsLen), end="\r")
         url_queue.task_done()
 
 def write_url():
@@ -133,6 +144,8 @@ def write_url():
             f.write(url + "\n")
 
 def threading_start(urls_list):
+    global urlsLen
+    urlsLen = len(urls_list);
     for url in urls_list:
         url = url.strip()
         if (len(url) == 0 or
@@ -143,14 +156,14 @@ def threading_start(urls_list):
     for _ in range(10):
         c = threading.Thread(target=url_check)
         threads.append(c)
-        c.setDaemon(True)
+        c.daemon = True
     for t in threads:
         t.start()
 
     url_queue.join()
 
 
-def urls_check(urls_txt):
+def urls_check(urls_txt, backlinkTo):
     if "http" in urls_txt:
         s = requests.Session()
         s.mount('http://', HTTPAdapter(max_retries=3))
@@ -161,16 +174,59 @@ def urls_check(urls_txt):
         threading_start(urls_list)
         write_url()
         return 
-    urls_list = get_url(urls_txt)
+    urls_list = get_url(urls_txt, backlinkTo)
     threading_start(urls_list)
     write_url()
 
 if __name__ == '__main__':
     Banner()
 
+    defaultInfo = """
+URL Survival Checker v0.2 by Hoothin
+
+A multi-threaded tool to check the status of a list of URLs from a local file or a remote URL. 
+It can also be used to check backlinks by replacing a placeholder in a template file.
+
+Usage:
+  # Check URLs from a local file
+  python url_checker.py <path_to_your_urls_file.txt>
+
+  # Check URLs from a remote file
+  python url_checker.py <http://your-domain.com/urls.txt>
+
+  # Check backlinks for a specific domain
+  # This requires a 'backlinks.txt' file where 'hoothin' is used as a placeholder for the target domain.
+  python url_checker.py -b your-target-domain.com
+
+Options:
+  -b, --backlink <domain>    Check backlinks for the specified domain. Replaces the 
+                               'hoothin' placeholder in 'backlinks.txt' with the given domain.
+  -h                         Show this help message and exit.
+"""
     try:
-        urls_txt = sys.argv[1]
-        urls_check(urls_txt)
-    except Exception as e:
-        print(e)
-        print("python3 url_checker.py url.txt\n OR\npython3 url_checker.py http://xxx.com/x.txt")
+        opts, args = getopt.getopt(sys.argv[1:],"b:h",["backlink="])
+    except getopt.GetoptError:
+        print(defaultInfo)
+        sys.exit(2)
+    for opt, arg in opts:
+        if opt == '-h':
+            print(defaultInfo)
+            sys.exit()
+        elif opt in ("-b", "--backlink"):
+            try:
+                urls_txt = "backlinks.txt"
+                print(f"Checking backlinks for '{arg}' using '{urls_txt}'...")
+                urls_check(urls_txt, arg)
+            except Exception as e:
+                print(defaultInfo)
+            sys.exit()
+
+    if sys.argv[1]:
+        try:
+            urls_txt = sys.argv[1]
+            urls_check(urls_txt, '')
+        except Exception as e:
+            print(defaultInfo)
+        sys.exit()
+    else:
+        print("python url_checker.py -h")
