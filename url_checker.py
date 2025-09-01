@@ -7,6 +7,7 @@ import html
 import socket
 import requests
 import getopt
+import os
 from datetime import *
 from requests.adapters import HTTPAdapter
 from urllib.parse import urlparse
@@ -55,7 +56,7 @@ def get_headers(url):
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'User-Agent': random.choice(useragent_list),
-        'Accept-Encoding': 'identity',#'gzip, deflate',
+        'Accept-Encoding': 'identity',# "gzip, deflate",
         'Accept-Language': 'zh-CN,zh;q=0.8',
         "Referer": res.scheme + "://" + res.netloc,
         'Content-Type': 'application/x-www-form-urlencoded'
@@ -76,61 +77,81 @@ def get_url(urls_txt, backlinkTo):
 
 
 def url_check():
-    global survival_urls
-    global broken_urls
-    global jsError_urls
-    global urlsLen
+    global survival_urls, broken_urls, jsError_urls, urlsLen, count
     while not url_queue.empty():
-
-        global count
-        url = url_queue.get()
-
-        url = url.strip()
-        headers = get_headers(url)
-        # print(url)
+        url = ""
         try:
-            #if "http" not in url and len(url) != 0  :
-            #    url = "http://"+ url
+            url = url_queue.get()
+            url = url.strip()
+            if not url: continue
+            
+            headers = get_headers(url)
             s = requests.Session()
             s.mount('http://', HTTPAdapter(max_retries=3))
             s.mount('https://', HTTPAdapter(max_retries=3))
             startTime = datetime.now()
-            response = s.get(url, headers=headers, timeout=5, verify=False, allow_redirects=True, stream=True)#no ssl, no 301
+            
+            response = s.get(url, headers=headers, timeout=10, verify=False, allow_redirects=True, stream=True)
             outStr = str(response.status_code)
-            # survival_urls[url] = response.status_code
-            if ("video" in response.headers['content-type'] or 
-                "audio" in response.headers['content-type'] or 
-                "octet-stream" in response.headers['content-type'] or
-                "binary" in response.headers['content-type'] or
-                "mepgURL" in response.headers['content-type'] or
-                "mpegurl" in response.headers['content-type'] or
-                "mpegURL" in response.headers['content-type']):
-                response.connection.close()
-                # outStr = outStr + "\t非网页：" + response.headers['content-type']
+            
+            content_type = response.headers.get('content-type', '').lower()
+            if ("video" in content_type or 
+                "audio" in content_type or 
+                "octet-stream" in content_type or
+                "binary" in content_type or
+                "mepgurl" in content_type or
+                "mpegurl" in content_type):
+                response.close()
             else:
                 if 200 <= response.status_code <= 206:
                     endTime = datetime.now()
                     span = (endTime-startTime).total_seconds()
                     response.encoding = response.apparent_encoding
-                    content = response.text
-                    outStr = str(span) + " seconds\t" + outStr
-                    title = re.findall('<title>(.+)</title>', content)
+                    
+                    content = ""
+                    max_bytes_to_read = 512000 # 500 KB
+                    bytes_read = 0
+                    try:
+                        for chunk in response.iter_content(chunk_size=1024):
+                            if chunk:
+                                try:
+                                    content += chunk.decode(response.encoding, errors='ignore')
+                                except (UnicodeDecodeError, TypeError):
+                                    content += chunk.decode('utf-8', errors='ignore')
+                                
+                                chunkLen = len(chunk)
+                                if chunkLen == 0:
+                                    break
+                                bytes_read += chunkLen
+                                if '</title>' in content.lower() or bytes_read > max_bytes_to_read:
+                                    break
+                    finally:
+                        response.close()
+
+                    outStr = str(span) + "\t" + outStr
+                    title = re.findall('<title>(.+?)</title>', content, re.IGNORECASE | re.DOTALL)
                     if title:
-                        outStr = outStr + "\t" + html.unescape(title[0])
-                        if "江苏反诈公益宣传" in title:
+                        outStr = outStr + "\t" + html.unescape(title[0].strip())
+                        if "江苏反诈公益宣传" in title[0]:
                             jsError_urls[urlparse(url).netloc] = 1
                     survival_urls[url] = outStr
                 else:
                     broken_urls[urlparse(url).netloc] = outStr
+                    response.close()
+            
             print(url + "\t\t" + (outStr[0:20]))
+
         except Exception as e:
             broken_urls[urlparse(url).netloc] = "error"
             print(url + "\t\tInvalid website")
+        
         count += 1
-        print("Current: " + str(count) + "/" + str(urlsLen), end="\r")
+        print("Current: " + str(count) + "/" + str(urlsLen), end="\r", flush=True)
         if count == urlsLen:
-            print("Completed: " + str(count) + "/" + str(urlsLen), end="\r")
+            print("Completed: " + str(count) + "/" + str(urlsLen), end="\r", flush=True)
         url_queue.task_done()
+
+
 
 def write_url():
     with open("result.txt", "w+", encoding='utf-8') as f:
@@ -142,6 +163,7 @@ def write_url():
     with open("urlJsError.txt", "w+", encoding='utf-8') as f:
         for url, status_code in jsError_urls.items():
             f.write(url + "\n")
+
 
 def threading_start(urls_list):
     global urlsLen
@@ -169,7 +191,7 @@ def urls_check(urls_txt, backlinkTo):
         s = requests.Session()
         s.mount('http://', HTTPAdapter(max_retries=3))
         s.mount('https://', HTTPAdapter(max_retries=3))
-        res = s.get(urls_txt, timeout=5)
+        res = s.get(urls_txt, timeout=10)
         res.encoding = res.apparent_encoding
         urls_list=re.findall('https?://[-A-Za-z0-9+&@#/%?=~_|!:,.;]+[-A-Za-z0-9+&@#/%=~_|]', res.text)
         threading_start(urls_list)
@@ -179,10 +201,17 @@ def urls_check(urls_txt, backlinkTo):
     threading_start(urls_list)
     write_url()
 
+
 if __name__ == '__main__':
+    # Clear previous log file
+    try:
+        if os.path.exists("debug_log.txt"):
+            os.remove("debug_log.txt")
+    except:
+        pass
     Banner()
 
-    defaultInfo = """
+    defaultInfo = '''
 URL Survival Checker v0.2 by Hoothin
 
 A multi-threaded tool to check the status of a list of URLs from a local file or a remote URL. 
@@ -203,9 +232,9 @@ Options:
   -b, --backlink <domain>    Check backlinks for the specified domain. Replaces the 
                                'hoothin' placeholder in 'backlinks.txt' with the given domain.
   -h                         Show this help message and exit.
-"""
+'''
     try:
-        opts, args = getopt.getopt(sys.argv[1:],"b:h",["backlink="])
+        opts, args = getopt.getopt(sys.argv[1:],'b:h',["backlink="])
     except getopt.GetoptError:
         print(defaultInfo)
         sys.exit(2)
