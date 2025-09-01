@@ -145,6 +145,7 @@ def write_url():
 
 def threading_start(urls_list):
     global urlsLen
+    global threading_num
     urlsLen = len(urls_list);
     for url in urls_list:
         url = url.strip()
@@ -153,7 +154,7 @@ def threading_start(urls_list):
             continue
         url_queue.put(url)
     threads = []
-    for _ in range(10):
+    for _ in range(threading_num):
         c = threading.Thread(target=url_check)
         threads.append(c)
         c.daemon = True
